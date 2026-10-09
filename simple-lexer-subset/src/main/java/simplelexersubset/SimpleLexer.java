@@ -76,13 +76,17 @@ public final class SimpleLexer {
     /* Constructs an NFA for the given set of tokens. */
     static Nfa construct() {
       final Nfa nfa = new Nfa();
-      // IF | [A-Za-z_][A-Za-z0-9_]* | 0 | [1-9][0-9]*
+      // IF | [A-Za-z_][A-Za-z0-9_]* | 0 | [1-9][0-9]* | ( | ) | + | *
       nfa.add(nfa.word("if"), Token.Type.IF);
       nfa.add(nfa.concat(nfa.chars(identifierStart()), nfa.star(nfa.chars(identifierPart()))),
           Token.Type.ID);
       nfa.add(nfa.chars("0"), Token.Type.INT);
       nfa.add(nfa.concat(nfa.chars("123456789"), nfa.star(nfa.chars("0123456789"))),
           Token.Type.INT);
+      nfa.add(nfa.chars("("), Token.Type.LPAREN);
+      nfa.add(nfa.chars(")"), Token.Type.RPAREN);
+      nfa.add(nfa.chars("+"), Token.Type.PLUS);
+      nfa.add(nfa.chars("*"), Token.Type.STAR);
       return nfa;
     }
 
@@ -177,43 +181,30 @@ public final class SimpleLexer {
 
     /* Converts an NFA to a DFA using the subset construction algorithm. */
     static Dfa convertNfaToDfa(final Nfa nfa) {
-      // TODO: Implement the subset construction algorithm to convert the NFA to a DFA.
-      // initial state
-      final Set<Nfa.State> startSet = closure(Collections.singleton(nfa.start));
-      final Map<Set<Nfa.State>,State> dfaStates = new HashMap<Set<Nfa.State>, State>();
+      final Map<Set<Nfa.State>, State> states = new HashMap<Set<Nfa.State>, State>();
+      final Queue<Set<Nfa.State>> pending = new ArrayDeque<Set<Nfa.State>>();
+      final Set<Nfa.State> initial = closure(Collections.singleton(nfa.start));
+      states.put(initial, new State(acceptingType(initial)));
+      pending.add(initial);
 
-      //set queue(store state before make translation)
-      final Queue<Set<Nfa.State>> worklist = new ArrayDeque<Set<Nfa.State>>();
-
-      final State startState = new State(acceptingType(startSet));
-
-      dfaStates.put(startSet, startState);
-      worklist.add(startSet);
-
-      while(!worklist.isEmpty()){
-        final Set<Nfa.State> currentSet = worklist.remove();
-        final State currentDfaState = dfaStates.get(currentSet);
-        
-        for (final Character character : nfa.alphabet){
-          final Set<Nfa.State> movedStates = move(currentSet, character);
-          final Set<Nfa.State> nextSet = closure(movedStates);
-
-          if(nextSet.isEmpty()){
+      while (!pending.isEmpty()) {
+        final Set<Nfa.State> currentSet = pending.remove();
+        final State current = states.get(currentSet);
+        for (final Character character : nfa.alphabet) {
+          final Set<Nfa.State> targetSet = closure(move(currentSet, character));
+          if (targetSet.isEmpty()) {
             continue;
           }
-
-          State nextDfaState = dfaStates.get(nextSet);
-
-          if(nextDfaState == null){
-            nextDfaState = new State(acceptingType(nextSet));
-            dfaStates.put(nextSet, nextDfaState);
-            worklist.add(nextSet);
+          State target = states.get(targetSet);
+          if (target == null) {
+            target = new State(acceptingType(targetSet));
+            states.put(targetSet, target);
+            pending.add(targetSet);
           }
-
-          currentDfaState.transitions.put(character, nextDfaState);
+          current.transitions.put(character, target);
         }
       }
-      return new Dfa(startState); // TODO: Replace it with the actual DFA instance.
+      return new Dfa(states.get(initial));
     }
 
     private static Set<Nfa.State> move(final Set<Nfa.State> states, final Character character) {
@@ -260,7 +251,10 @@ public final class SimpleLexer {
       if (type == Token.Type.ID) {
         return 1;
       }
-      return 2;
+      if (type == Token.Type.INT) {
+        return 2;
+      }
+      return 3;
     }
 
     private static final class State {
