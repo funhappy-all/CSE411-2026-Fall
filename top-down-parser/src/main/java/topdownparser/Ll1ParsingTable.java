@@ -39,7 +39,6 @@ public final class Ll1ParsingTable {
     if (grammar == null) {
       throw new IllegalArgumentException("grammar must not be null");
     }
-
     final Map<String, Set<String>> first = initialSets(grammar);
     boolean changed;
     do {
