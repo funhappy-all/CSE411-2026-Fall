@@ -1,10 +1,17 @@
 {
-    "java.jdt.ls.java.home": "/opt/homebrew/opt/openjdk",
     "files.watcherExclude": {
         "**/target/**": true
+    },
+    "[antlr]": {
+        "editor.formatOnSave": false
     },
     "java.diagnostic.filter": [
         "**/simple-lexer/**/*.java",
         "**/simple-lexer-subset/**/*.java"
-    ]
+    ],
+    "[json]": {
+        "editor.formatOnSave": false,
+        "editor.formatOnType": false,
+        "editor.formatOnPaste": false
+    }
 }
