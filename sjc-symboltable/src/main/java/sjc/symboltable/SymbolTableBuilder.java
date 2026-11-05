@@ -116,31 +116,100 @@ public class SymbolTableBuilder {
 
     @Override
     public boolean visit(final FieldDeclaration node) {
-      // TODO
+      for (final Object o : node.fragments()) {
+        final VariableDeclarationFragment fragment =
+            (VariableDeclarationFragment) o;
+        final String name = fragment.getName().getIdentifier();
+        final Pair<String, String> key = new Pair<String, String>(
+            this.className, name);
+        if (this.fieldMap.containsKey(key)) {
+          throw new Error(fragment, "Duplicate field declaration: \"" + name
+              + "\"");
+        }
+        this.fieldMap.put(key, node);
+      }
       return false;
     }
 
     @Override
     public boolean visit(final MethodDeclaration node) {
-      // TODO
+      final Map<String, ASTNode> savedNameMap = this.nameMap;
+      final Set<String> savedLocalNames = this.localNames;
+      this.nameMap = new HashMap<>();
+      this.localNames = new HashSet<>();
+
+      for (final Object o : node.parameters()) {
+        final SingleVariableDeclaration parameter =
+            (SingleVariableDeclaration) o;
+        final String name = parameter.getName().getIdentifier();
+        if (!this.localNames.add(name)) {
+          throw new Error(parameter,
+              "Duplicate local variable declaration: \"" + name + "\"");
+        }
+        this.nameMap.put(name, parameter);
+      }
+
+      if (node.getBody() != null) {
+        for (final Object o : node.getBody().statements()) {
+          ((Statement) o).accept(this);
+        }
+      }
+
+      this.nameMap = savedNameMap;
+      this.localNames = savedLocalNames;
       return false;
     }
 
     @Override
     public boolean visit(final MethodInvocation node) {
-      // TODO
+      final Expression expression = node.getExpression();
+      if (expression == null
+          || (expression instanceof SimpleName
+              && ((SimpleName) expression).getIdentifier().equals(this.className))) {
+        final MethodDeclaration declaration = this.methodMap.get(
+            node.getName().getIdentifier());
+        if (declaration != null) {
+          this.result.put(node, declaration);
+        }
+      } else if (!(expression instanceof SimpleName)) {
+        expression.accept(this);
+      }
+
+      for (final Object o : node.arguments()) {
+        ((Expression) o).accept(this);
+      }
       return false;
     }
 
     @Override
     public boolean visit(final SimpleName node) {
-      // TODO
+      final ASTNode declaration = this.nameMap.get(node.getIdentifier());
+      if (declaration == null) {
+        throw new Error(node,
+            "Unresolvable variable: \"" + node.getIdentifier() + "\"");
+      }
+      this.result.put(node, declaration);
       return false;
     }
 
     @Override
     public boolean visit(final VariableDeclarationStatement node) {
-      // TODO
+      for (final Object o : node.fragments()) {
+        final VariableDeclarationFragment fragment =
+            (VariableDeclarationFragment) o;
+        final String name = fragment.getName().getIdentifier();
+        if (!this.localNames.add(name)) {
+          throw new Error(fragment,
+              "Duplicate local variable declaration: \"" + name + "\"");
+        }
+        // Store the whole statement rather than only its name fragment.  The
+        // declaration is also the object used by the type checker and by the
+        // required symbol-table output (for example, "int i;").
+        this.nameMap.put(name, node);
+        if (fragment.getInitializer() != null) {
+          fragment.getInitializer().accept(this);
+        }
+      }
       return false;
     }
 
@@ -177,7 +246,39 @@ public class SymbolTableBuilder {
 
     @Override
     public boolean visit(final TypeDeclaration node) {
-      // TODO
+      final String savedClassName = this.className;
+      final Map<String, MethodDeclaration> savedMethodMap = this.methodMap;
+      this.className = node.getName().getFullyQualifiedName();
+      this.methodMap = new HashMap<>();
+
+      if (!hasPublicModifier(node.modifiers())) {
+        if (this.classMap.containsKey(this.className)) {
+          throw new Error(node,
+              "Duplicate class declaration: \"" + this.className + "\"");
+        }
+        this.classMap.put(this.className, node);
+      }
+
+      // Register every method before visiting a method body, so forward calls
+      // (for example, main calling a method declared later) can be resolved.
+      for (final Object o : node.bodyDeclarations()) {
+        if (o instanceof MethodDeclaration) {
+          final MethodDeclaration method = (MethodDeclaration) o;
+          final String name = method.getName().getIdentifier();
+          if (this.methodMap.containsKey(name)) {
+            throw new Error(method,
+                "Duplicate method declaration: \"" + name + "\"");
+          }
+          this.methodMap.put(name, method);
+        }
+      }
+
+      for (final Object o : node.bodyDeclarations()) {
+        ((ASTNode) o).accept(this);
+      }
+
+      this.className = savedClassName;
+      this.methodMap = savedMethodMap;
       return false;
     }
   }
