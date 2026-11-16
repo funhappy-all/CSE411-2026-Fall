@@ -116,100 +116,85 @@ public class SymbolTableBuilder {
 
     @Override
     public boolean visit(final FieldDeclaration node) {
-      for (final Object o : node.fragments()) {
-        final VariableDeclarationFragment fragment =
-            (VariableDeclarationFragment) o;
-        final String name = fragment.getName().getIdentifier();
-        final Pair<String, String> key = new Pair<String, String>(
-            this.className, name);
-        if (this.fieldMap.containsKey(key)) {
-          throw new Error(fragment, "Duplicate field declaration: \"" + name
-              + "\"");
-        }
-        this.fieldMap.put(key, node);
+      final VariableDeclarationFragment vdf = (VariableDeclarationFragment) node
+          .fragments().get(0);
+      final String name = vdf.getName().getIdentifier();
+      if (this.nameMap.containsKey(name)) {
+        throw new Error(node, "Error in field declaration '" + name
+            + "' : the field name has been used in:\n" + this.nameMap.get(name));
       }
+      this.nameMap.put(name, node);
       return false;
     }
 
     @Override
     public boolean visit(final MethodDeclaration node) {
-      final Map<String, ASTNode> savedNameMap = this.nameMap;
-      final Set<String> savedLocalNames = this.localNames;
-      this.nameMap = new HashMap<>();
-      this.localNames = new HashSet<>();
-
       for (final Object o : node.parameters()) {
-        final SingleVariableDeclaration parameter =
-            (SingleVariableDeclaration) o;
-        final String name = parameter.getName().getIdentifier();
-        if (!this.localNames.add(name)) {
-          throw new Error(parameter,
-              "Duplicate local variable declaration: \"" + name + "\"");
+        final SingleVariableDeclaration svd = (SingleVariableDeclaration) o;
+        final String name = svd.getName().getIdentifier();
+        if (this.nameMap.containsKey(name)) {
+          throw new Error(node, "Error in method parameter declaration of '"
+              + node.getName().getIdentifier() + "' : variable name '" + name
+              + "' has been used in:\n" + this.nameMap.get(name));
         }
-        this.nameMap.put(name, parameter);
-      }
 
-      if (node.getBody() != null) {
-        for (final Object o : node.getBody().statements()) {
-          ((Statement) o).accept(this);
-        }
+        this.localNames.add(name);
+        this.nameMap.put(name, svd);
       }
+      node.getBody().accept(this);
 
-      this.nameMap = savedNameMap;
-      this.localNames = savedLocalNames;
+      for (final String name : this.localNames) {
+        this.nameMap.remove(name);
+      }
+      this.localNames.clear();
       return false;
     }
 
     @Override
     public boolean visit(final MethodInvocation node) {
-      final Expression expression = node.getExpression();
-      if (expression == null
-          || (expression instanceof SimpleName
-              && ((SimpleName) expression).getIdentifier().equals(this.className))) {
-        final MethodDeclaration declaration = this.methodMap.get(
-            node.getName().getIdentifier());
-        if (declaration != null) {
-          this.result.put(node, declaration);
-        }
-      } else if (!(expression instanceof SimpleName)) {
-        expression.accept(this);
-      }
+      final String methodName = node.getName().getIdentifier();
 
-      for (final Object o : node.arguments()) {
-        ((Expression) o).accept(this);
+      if ((node.getExpression() == null)
+          || this.className.equals(node.getExpression().toString())) {
+        if (this.methodMap.containsKey(methodName)) {
+          this.result.put(node, this.methodMap.get(methodName));
+        } else {
+          throw new Error(node, "Cannot resolve method '" + methodName
+              + "' in\n:" + node);
+        }
+      }
+      for (final Object e : node.arguments()) {
+        ((Expression) e).accept(this);
       }
       return false;
     }
 
     @Override
     public boolean visit(final SimpleName node) {
-      final ASTNode declaration = this.nameMap.get(node.getIdentifier());
-      if (declaration == null) {
-        throw new Error(node,
-            "Unresolvable variable: \"" + node.getIdentifier() + "\"");
+      final String varName = node.getIdentifier();
+      final ASTNode parent = node.getParent();
+      if ((parent instanceof Expression) || (parent instanceof Statement)) {
+        if (this.nameMap.containsKey(varName)) {
+          this.result.put(node, this.nameMap.get(varName));
+        } else {
+          throw new Error(node, "Cannot resolve symbol '" + varName + "' in:\n"
+              + parent);
+        }
       }
-      this.result.put(node, declaration);
       return false;
     }
 
     @Override
     public boolean visit(final VariableDeclarationStatement node) {
-      for (final Object o : node.fragments()) {
-        final VariableDeclarationFragment fragment =
-            (VariableDeclarationFragment) o;
-        final String name = fragment.getName().getIdentifier();
-        if (!this.localNames.add(name)) {
-          throw new Error(fragment,
-              "Duplicate local variable declaration: \"" + name + "\"");
-        }
-        // Store the whole statement rather than only its name fragment.  The
-        // declaration is also the object used by the type checker and by the
-        // required symbol-table output (for example, "int i;").
-        this.nameMap.put(name, node);
-        if (fragment.getInitializer() != null) {
-          fragment.getInitializer().accept(this);
-        }
+      final VariableDeclarationFragment vdf = (VariableDeclarationFragment) node
+          .fragments().get(0);
+      final String name = vdf.getName().getIdentifier();
+      if (this.nameMap.containsKey(name)) {
+        throw new Error(node, "Error in local variable declaration '" + name
+            + "' : the variable name has been used in:\n" + this.nameMap.get(name));
       }
+      this.localNames.add(name);
+      this.nameMap.put(name, node);
       return false;
     }
 
@@ -246,39 +231,61 @@ public class SymbolTableBuilder {
 
     @Override
     public boolean visit(final TypeDeclaration node) {
-      final String savedClassName = this.className;
-      final Map<String, MethodDeclaration> savedMethodMap = this.methodMap;
-      this.className = node.getName().getFullyQualifiedName();
-      this.methodMap = new HashMap<>();
-
-      if (!hasPublicModifier(node.modifiers())) {
-        if (this.classMap.containsKey(this.className)) {
-          throw new Error(node,
-              "Duplicate class declaration: \"" + this.className + "\"");
+      if (hasPublicModifier(node.modifiers())) {
+        // This is the main class.  Resolve its fields and methods first so
+        // references in method bodies can be bound below.
+        this.className = node.getName().getIdentifier();
+        if ("java.lang.String".equals(this.className)) {
+          throw new Error(node, "Cannot redeclare the String class");
         }
-        this.classMap.put(this.className, node);
-      }
-
-      // Register every method before visiting a method body, so forward calls
-      // (for example, main calling a method declared later) can be resolved.
-      for (final Object o : node.bodyDeclarations()) {
-        if (o instanceof MethodDeclaration) {
-          final MethodDeclaration method = (MethodDeclaration) o;
-          final String name = method.getName().getIdentifier();
-          if (this.methodMap.containsKey(name)) {
-            throw new Error(method,
-                "Duplicate method declaration: \"" + name + "\"");
+        for (final Object o : node.bodyDeclarations()) {
+          if (o instanceof FieldDeclaration) {
+            ((ASTNode) o).accept(this);
+          } else if (o instanceof MethodDeclaration) {
+            final MethodDeclaration md = (MethodDeclaration) o;
+            final String methodName = md.getName().getIdentifier();
+            if (this.methodMap.containsKey(methodName)) {
+              throw new Error(md, "Error in method declaration '" + methodName
+                  + "' : the method name has been used in:\n"
+                  + this.methodMap.get(methodName));
+            }
+            this.methodMap.put(methodName, md);
+          } else {
+            throw new Error((ASTNode) o,
+                "Unexpected TypeDeclaration's member: '" + node + "'");
           }
-          this.methodMap.put(name, method);
         }
+        for (final Object o : node.bodyDeclarations()) {
+          if (o instanceof MethodDeclaration) {
+            ((ASTNode) o).accept(this);
+          }
+        }
+        return false;
       }
+
+      final String className = node.getName().getIdentifier();
+      if (this.classMap.containsKey(className)) {
+        throw new Error(node, "Error in class declaration '" + className
+            + "' : the class name has been used in:\n"
+            + this.classMap.get(className));
+      }
+      this.classMap.put(className, node);
 
       for (final Object o : node.bodyDeclarations()) {
-        ((ASTNode) o).accept(this);
-      }
+        // simple class declaration only has field declarations
+        final FieldDeclaration fd = (FieldDeclaration) o;
 
-      this.className = savedClassName;
-      this.methodMap = savedMethodMap;
+        final VariableDeclarationFragment vdf = (VariableDeclarationFragment) fd
+            .fragments().get(0);
+        final String name = vdf.getName().getIdentifier();
+        final Pair<String, String> p = new Pair<>(className, name);
+        if (this.fieldMap.containsKey(p)) {
+          throw new Error(fd, "Error in field declaration '" + name
+              + "' : the field name has been used in:\n"
+              + this.fieldMap.get(new Pair<>(className, name)));
+        }
+        this.fieldMap.put(p, fd);
+      }
       return false;
     }
   }
